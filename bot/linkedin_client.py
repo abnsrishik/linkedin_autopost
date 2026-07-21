@@ -1,7 +1,10 @@
 import time
+
 import requests
-from config import LINKEDIN_CLIENT_ID, LINKEDIN_CLIENT_SECRET
+
+from config import LINKEDIN_CLIENT_ID, LINKEDIN_CLIENT_SECRET, LINKEDIN_VERSION
 from bot.db import get_tokens, save_tokens
+
 
 class LinkedInClient:
     def __init__(self):
@@ -11,11 +14,16 @@ class LinkedInClient:
     def refresh_access_token_if_needed(self):
         token_data = get_tokens()
         if not token_data:
-            raise Exception("No OAuth tokens found. Please run setup_linkedin_oauth.py first.")
+            raise Exception("No OAuth tokens found. Send /reauth or run setup_linkedin_oauth.py.")
 
-        # Refresh if token is within 5 minutes of expiring
         if time.time() < (token_data["expires_at"] - 300):
             return token_data["access_token"]
+
+        if not token_data.get("refresh_token"):
+            raise Exception("No refresh token available. Send /reauth to re-authorize.")
+
+        if time.time() >= token_data["refresh_expires_at"]:
+            raise Exception("LinkedIn refresh token expired. Send /reauth or run setup_linkedin_oauth.py again.")
 
         print("Refreshing LinkedIn access token...")
         url = "https://www.linkedin.com/oauth/v2/accessToken"
@@ -23,56 +31,63 @@ class LinkedInClient:
             "grant_type": "refresh_token",
             "refresh_token": token_data["refresh_token"],
             "client_id": self.client_id,
-            "client_secret": self.client_secret
+            "client_secret": self.client_secret,
         }
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
-        
-        response = requests.post(url, data=payload, headers=headers)
+
+        response = requests.post(url, data=payload, headers=headers, timeout=30)
         if response.status_code != 200:
             raise Exception(f"Failed to refresh access token: {response.status_code} - {response.text}")
 
         data = response.json()
-        # Save refreshed token with standard durations
         save_tokens(
             access_token=data["access_token"],
             refresh_token=data.get("refresh_token", token_data["refresh_token"]),
             expires_in=data["expires_in"],
-            refresh_token_expires_in=data.get("refresh_token_expires_in", 31536000), # Default 1 yr if omitted
-            org_urn=token_data["org_urn"]
+            refresh_token_expires_in=data.get(
+                "refresh_token_expires_in",
+                max(0, token_data["refresh_expires_at"] - time.time()),
+            ),
+            author_urn=token_data["author_urn"],
+            author_type="member",
         )
         return data["access_token"]
 
     def publish_post(self, commentary: str) -> str:
         access_token = self.refresh_access_token_if_needed()
         token_data = get_tokens()
-        org_urn = token_data.get("org_urn")
-        
-        if not org_urn:
-            raise Exception("No Organization URN linked in database.")
+        author_urn = token_data.get("author_urn")
+
+        if not author_urn:
+            raise Exception("No LinkedIn member author URN found. Please run setup_linkedin_oauth.py first.")
+        if not author_urn.startswith("urn:li:person:"):
+            raise Exception("LinkedIn author URN must be a person URN for personal profile posting.")
 
         url = "https://api.linkedin.com/rest/posts"
         headers = {
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
-            "LinkedIn-Version": "202506", # API Version
-            "X-Restli-Protocol-Version": "2.0.0"
+            "X-Restli-Protocol-Version": "2.0.0",
+            "Linkedin-Version": LINKEDIN_VERSION,
         }
-        
         payload = {
-            "author": org_urn,
+            "author": author_urn,
             "commentary": commentary,
             "visibility": "PUBLIC",
             "distribution": {
                 "feedDistribution": "MAIN_FEED",
-                "targetEntities": []
+                "targetEntities": [],
+                "thirdPartyDistributionChannels": [],
             },
-            "lifecycleState": "PUBLISHED"
+            "lifecycleState": "PUBLISHED",
+            "isReshareDisabledByAuthor": False,
         }
 
-        response = requests.post(url, headers=headers, json=payload)
+        response = requests.post(url, headers=headers, json=payload, timeout=30)
         if response.status_code != 201:
             raise Exception(f"LinkedIn publication failed: {response.status_code} - {response.text}")
 
-        # The post URN is returned in the x-restli-id header
-        post_urn = response.headers.get("x-restli-id")
+        post_urn = response.headers.get("x-restli-id") or response.headers.get("X-RestLi-Id")
+        if not post_urn:
+            raise Exception("LinkedIn publication succeeded but did not return X-RestLi-Id header.")
         return post_urn

@@ -14,11 +14,32 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_USER_ID = int(os.getenv("TELEGRAM_USER_ID", "0"))
+try:
+    TELEGRAM_USER_ID = int(os.getenv("TELEGRAM_USER_ID", "0"))
+except ValueError:
+    TELEGRAM_USER_ID = 0
 
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROQ_MODEL = os.getenv("GROQ_MODEL", "llama-3.3-70b-specdec")
+GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
 LINKEDIN_CLIENT_ID = os.getenv("LINKEDIN_CLIENT_ID")
 LINKEDIN_CLIENT_SECRET = os.getenv("LINKEDIN_CLIENT_SECRET")
 LINKEDIN_REDIRECT_URI = os.getenv("LINKEDIN_REDIRECT_URI", "http://localhost:8080/callback")
+LINKEDIN_VERSION = os.getenv("LINKEDIN_VERSION", "202604")
+
+
+def validate_config():
+    missing = []
+    if not TELEGRAM_BOT_TOKEN:
+        missing.append("TELEGRAM_BOT_TOKEN")
+    if not TELEGRAM_USER_ID:
+        missing.append("TELEGRAM_USER_ID")
+    if not GROQ_API_KEY:
+        missing.append("GROQ_API_KEY")
+    if not LINKEDIN_CLIENT_ID:
+        missing.append("LINKEDIN_CLIENT_ID")
+    if not LINKEDIN_CLIENT_SECRET:
+        missing.append("LINKEDIN_CLIENT_SECRET")
+
+    if missing:
+        raise RuntimeError(f"Missing required environment variables: {', '.join(missing)}")

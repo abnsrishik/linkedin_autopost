@@ -1,11 +1,19 @@
 [Unit]
-Description=LinkedIn Autoposter Bot Interactive Session
-After=network.target
+Description=LinkedIn Autoposter Telegram Bot
+After=network-online.target
+Wants=network-online.target
 
 [Service]
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/linkedin-autoposter
+EnvironmentFile=/home/ubuntu/linkedin-autoposter/.env
+ExecStartPre=/usr/bin/mkdir -p /home/ubuntu/linkedin-autoposter/logs /home/ubuntu/linkedin-autoposter/data
 ExecStart=/home/ubuntu/linkedin-autoposter/venv/bin/python run.py
+Restart=always
+RestartSec=10
 StandardOutput=append:/home/ubuntu/linkedin-autoposter/logs/autoposter.log
 StandardError=append:/home/ubuntu/linkedin-autoposter/logs/autoposter.log
+
+[Install]
+WantedBy=multi-user.target

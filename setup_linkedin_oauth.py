@@ -1,116 +1,195 @@
+import argparse
+import secrets
 import sys
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, HTTPServer
+
 import requests
+
 from config import LINKEDIN_CLIENT_ID, LINKEDIN_CLIENT_SECRET, LINKEDIN_REDIRECT_URI
 from bot.db import init_db, save_tokens
 
-PORT = int(urllib.parse.urlparse(LINKEDIN_REDIRECT_URI).port or 8080)
-CODE = None
 
-class CallbackHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        global CODE
-        query = urllib.parse.urlparse(self.path).query
-        params = urllib.parse.parse_qs(query)
-        if "code" in params:
-            CODE = params["code"][0]
-            self.send_response(200)
-            self.send_header('Content-type', 'text/html')
-            self.end_headers()
-            self.wfile.write(b"<h1>Success!</h1><p>Authorization code caught. Return to your terminal.</p>")
-        else:
-            self.send_response(400)
-            self.end_headers()
+SCOPES = "openid profile w_member_social"
+REQUEST_TIMEOUT_SECONDS = 30
 
-def run_local_server():
-    server = HTTPServer(('localhost', PORT), CallbackHandler)
-    print(f"Waiting on callback redirection on http://localhost:{PORT}...")
-    server.handle_request() # Single-request exit
 
-def get_linkedin_pages(access_token):
-    url = "https://api.linkedin.com/v2/organizationalEntityAcls?q=roleAssignee&role=ADMINISTRATOR"
-    headers = {"Authorization": f"Bearer {access_token}"}
-    res = requests.get(url, headers=headers).json()
-    
-    pages = []
-    for item in res.get("elements", []):
-        org_urn = item.get("organizationalTarget")
-        if org_urn:
-            pages.append(org_urn)
-    return pages
+class OAuthCallbackServer:
+    def __init__(self, host: str, port: int, expected_state: str):
+        self.code = None
+        self.error = None
+        self.state = None
+        self.expected_state = expected_state
 
-def main():
-    init_db()
-    
-    if not LINKEDIN_CLIENT_ID or not LINKEDIN_CLIENT_SECRET:
-        print("Please configure Client credentials in .env first.")
-        sys.exit(1)
+        outer = self
 
-    scopes = "w_organization_social r_organization_social rw_organization_admin openid profile email"
-    encoded_scopes = urllib.parse.quote(scopes)
-    
-    auth_url = (
-        f"https://www.linkedin.com/oauth/v2/authorization"
-        f"?response_type=code"
-        f"&client_id={LINKEDIN_CLIENT_ID}"
-        f"&redirect_uri={urllib.parse.quote(LINKEDIN_REDIRECT_URI)}"
-        f"&scope={encoded_scopes}"
-        f"&state=autoposter_init"
-    )
-    
-    print("\n=== LinkedIn OAuth Setup ===")
-    print("Open the following link in your browser to sign in & authorize:")
-    print("-" * 60)
-    print(auth_url)
-    print("-" * 60)
-    
-    run_local_server()
-    
-    if not CODE:
-        print("Error: Authorization failed or did not provide a code.")
-        sys.exit(1)
-        
-    print("\nExchanging Authorization Code for access & refresh tokens...")
+        class CallbackHandler(BaseHTTPRequestHandler):
+            def log_message(self, format, *args):
+                return
+
+            def do_GET(self):
+                query = urllib.parse.urlparse(self.path).query
+                params = urllib.parse.parse_qs(query)
+                outer.code = params.get("code", [None])[0]
+                outer.error = params.get("error_description", params.get("error", [None]))[0]
+                outer.state = params.get("state", [None])[0]
+
+                if outer.code and outer.state == outer.expected_state:
+                    self.send_response(200)
+                    self.send_header("Content-type", "text/html")
+                    self.end_headers()
+                    self.wfile.write(b"<h1>Success</h1><p>Authorization complete. Return to terminal.</p>")
+                else:
+                    self.send_response(400)
+                    self.send_header("Content-type", "text/html")
+                    self.end_headers()
+                    message = outer.error or "Authorization response did not include a valid code/state."
+                    body = (
+                        "<h1>Authorization failed</h1>"
+                        f"<p>{message}</p>"
+                        "<p>Return to terminal.</p>"
+                    )
+                    self.wfile.write(body.encode("utf-8"))
+
+        self.server = HTTPServer((host, port), CallbackHandler)
+        self.server.timeout = 300
+
+    def wait_for_code(self):
+        self.server.handle_request()
+        self.server.server_close()
+
+        if self.state and self.state != self.expected_state:
+            raise RuntimeError("OAuth state mismatch. Authorization response rejected.")
+        if self.error:
+            raise RuntimeError(f"LinkedIn authorization failed: {self.error}")
+        if not self.code:
+            raise RuntimeError("Authorization timed out or no code was returned.")
+        return self.code
+
+
+def parse_redirect_port():
+    return int(urllib.parse.urlparse(LINKEDIN_REDIRECT_URI).port or 8080)
+
+
+def build_authorization_url(state: str):
+    params = {
+        "response_type": "code",
+        "client_id": LINKEDIN_CLIENT_ID,
+        "redirect_uri": LINKEDIN_REDIRECT_URI,
+        "scope": SCOPES,
+        "state": state,
+    }
+    return "https://www.linkedin.com/oauth/v2/authorization?" + urllib.parse.urlencode(params)
+
+
+def exchange_code_for_tokens(code: str):
     token_url = "https://www.linkedin.com/oauth/v2/accessToken"
     payload = {
         "grant_type": "authorization_code",
-        "code": CODE,
+        "code": code,
         "redirect_uri": LINKEDIN_REDIRECT_URI,
         "client_id": LINKEDIN_CLIENT_ID,
-        "client_secret": LINKEDIN_CLIENT_SECRET
+        "client_secret": LINKEDIN_CLIENT_SECRET,
     }
     headers = {"Content-Type": "application/x-www-form-urlencoded"}
-    
-    res = requests.post(token_url, data=payload, headers=headers).json()
-    if "access_token" not in res:
-        print(f"Token generation failed: {res}")
-        sys.exit(1)
-        
-    access_token = res["access_token"]
-    refresh_token = res["refresh_token"]
-    
-    print("Fetching managed LinkedIn Company Pages...")
-    pages = get_linkedin_pages(access_token)
-    if not pages:
-        print("Warning: No administered Company Pages found. Make sure you are an administrator of the page.")
-        org_urn = input("Please manually enter your target Organization URN (e.g. urn:li:organization:12345): ").strip()
-    else:
-        print("\nAdministered LinkedIn Pages found:")
-        for idx, page in enumerate(pages):
-            print(f"[{idx}] {page}")
-        choice = int(input("\nSelect page index to post to: "))
-        org_urn = pages[choice]
-        
+
+    response = requests.post(token_url, data=payload, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS)
+    if response.status_code != 200:
+        raise RuntimeError(f"Token generation failed: {response.status_code} - {response.text}")
+
+    data = response.json()
+    if "access_token" not in data:
+        raise RuntimeError(f"Token generation failed: {data}")
+    if "refresh_token" not in data:
+        print("Note: LinkedIn did not return a refresh_token. Access token will need manual re-auth when it expires.")
+    return data
+
+
+def get_linkedin_member_urn(access_token):
+    url = "https://api.linkedin.com/v2/userinfo"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    response = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT_SECONDS)
+    if response.status_code != 200:
+        raise RuntimeError(f"Failed to fetch LinkedIn member profile: {response.status_code} - {response.text}")
+
+    member_id = response.json().get("sub")
+    if not member_id:
+        raise RuntimeError("LinkedIn userinfo response did not include member subject identifier.")
+    return f"urn:li:person:{member_id}"
+
+
+def save_oauth_result(token_data, author_urn):
+    has_refresh = "refresh_token" in token_data
     save_tokens(
-        access_token=access_token,
-        refresh_token=refresh_token,
-        expires_in=res["expires_in"],
-        refresh_token_expires_in=res["refresh_token_expires_in"],
-        org_urn=org_urn
+        access_token=token_data["access_token"],
+        refresh_token=token_data.get("refresh_token", ""),
+        expires_in=token_data["expires_in"],
+        refresh_token_expires_in=token_data.get(
+            "refresh_token_expires_in", token_data["expires_in"]
+        ),
+        author_urn=author_urn,
+        author_type="member",
     )
-    
-    print(f"\nConfiguration Saved in DB! Target Page: {org_urn}")
+    if not has_refresh:
+        print("Access token saved without refresh token. Use /reauth in Telegram when it expires.")
+
+
+def perform_reauth(code: str):
+    token_data = exchange_code_for_tokens(code)
+    author_urn = get_linkedin_member_urn(token_data["access_token"])
+    save_oauth_result(token_data, author_urn)
+    return author_urn
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Set up LinkedIn OAuth tokens for autoposter.")
+    parser.add_argument(
+        "--manual-code",
+        help="Authorization code copied from the redirect URL. Use when the callback server cannot receive the redirect.",
+    )
+    args = parser.parse_args()
+
+    init_db()
+
+    if not LINKEDIN_CLIENT_ID or not LINKEDIN_CLIENT_SECRET:
+        print("Configure LINKEDIN_CLIENT_ID and LINKEDIN_CLIENT_SECRET in .env first.")
+        return 1
+
+    state = secrets.token_urlsafe(24)
+    auth_url = build_authorization_url(state)
+
+    print("\n=== LinkedIn OAuth Setup ===")
+    print("Open this URL in your browser:")
+    print("-" * 60)
+    print(auth_url)
+    print("-" * 60)
+
+    if args.manual_code:
+        code = args.manual_code.strip()
+    else:
+        port = parse_redirect_port()
+        print(f"Waiting up to 5 minutes on {LINKEDIN_REDIRECT_URI} ...")
+        print("On a remote server, use an SSH tunnel or rerun with --manual-code.")
+        server = OAuthCallbackServer("localhost", port, state)
+        code = server.wait_for_code()
+
+    print("\nExchanging authorization code for tokens...")
+    token_data = exchange_code_for_tokens(code)
+
+    print("Fetching authenticated LinkedIn member profile...")
+    author_urn = get_linkedin_member_urn(token_data["access_token"])
+    save_oauth_result(token_data, author_urn)
+
+    print(f"\nConfiguration saved. Target Author: {author_urn}")
+    return 0
+
 
 if __name__ == "__main__":
-    main()
+    try:
+        sys.exit(main())
+    except KeyboardInterrupt:
+        print("\nOAuth setup cancelled.")
+        sys.exit(130)
+    except Exception as e:
+        print(f"\nOAuth setup failed: {e}")
+        sys.exit(1)

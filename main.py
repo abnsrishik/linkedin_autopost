@@ -1,5 +1,4 @@
-def main():
-    print("Hello from linkedin-autoposter!")
+from run import main
 
 
 if __name__ == "__main__":

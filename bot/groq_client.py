@@ -33,7 +33,7 @@ class GroqClient:
             "temperature": temperature
         }
         
-        response = requests.post(self.url, headers=self.headers, json=payload)
+        response = requests.post(self.url, headers=self.headers, json=payload, timeout=60)
         if response.status_code != 200:
             raise Exception(f"Groq API returned an error: {response.status_code} - {response.text}")
             
