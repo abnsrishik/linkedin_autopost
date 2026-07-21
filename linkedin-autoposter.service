@@ -1,0 +1,11 @@
+[Unit]
+Description=LinkedIn Autoposter Bot Interactive Session
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/linkedin-autoposter
+ExecStart=/home/ubuntu/linkedin-autoposter/venv/bin/python run.py
+StandardOutput=append:/home/ubuntu/linkedin-autoposter/logs/autoposter.log
+StandardError=append:/home/ubuntu/linkedin-autoposter/logs/autoposter.log

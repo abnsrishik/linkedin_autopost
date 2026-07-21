@@ -1,0 +1,16 @@
+[Unit]
+Description=Timer for LinkedIn Autoposter Tuesday and Thursday
+
+[Timer]
+# Timezone-aware triggers for IST (using systemd system timezone)
+OnCalendar=Tue,Thu 08:30:00 Asia/Kolkata
+
+# If you want to randomize the posting within 8:00 - 10:00 AM IST instead, 
+# uncomment the two lines below and comment out the OnCalendar line above:
+# OnCalendar=Tue,Thu 08:00:00 Asia/Kolkata
+# RandomizedDelaySec=2h
+
+Persistent=true
+
+[Install]
+WantedBy=timers.target
