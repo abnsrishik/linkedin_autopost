@@ -2,16 +2,35 @@
 Description=LinkedIn Autoposter Telegram Bot
 After=network-online.target
 Wants=network-online.target
+# Service refuses to start if .env is missing — fail loud, not silently 24/7-broken.
+ConditionPathExists=/home/ubuntu/linkedin-autoposter/.env
+# Read .env every restart so token refreshes / config changes take effect.
+EnvironmentFile=/home/ubuntu/linkedin-autoposter/.env
 
 [Service]
 Type=simple
 User=ubuntu
 WorkingDirectory=/home/ubuntu/linkedin-autoposter
-EnvironmentFile=/home/ubuntu/linkedin-autoposter/.env
+
 ExecStartPre=/usr/bin/mkdir -p /home/ubuntu/linkedin-autoposter/logs /home/ubuntu/linkedin-autoposter/data
 ExecStart=/home/ubuntu/linkedin-autoposter/venv/bin/python run.py
-Restart=always
+
+# Restart on any failure except clean manual stops (codes 0 / SIGINT / SIGTERM).
+# 1 = general failure, 2 = misuse of shell, 130=ctrl-c on bash, 143=SIGTERM.
+Restart=on-failure
+RestartPreventExitStatus=0 130 143
 RestartSec=10
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+# Send SIGTERM first, then SIGKILL after 30s — gives SQLite + Telegram long-poll
+# time to close cleanly. Avoids "zombie venv/bin/python" after restart storms.
+KillMode=mixed
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Logs go to BOTH journald (queryable via `journalctl`) AND a flat file
+# (easy to tail from the laptop). Don't replace the file — append.
 StandardOutput=append:/home/ubuntu/linkedin-autoposter/logs/autoposter.log
 StandardError=append:/home/ubuntu/linkedin-autoposter/logs/autoposter.log
 
