@@ -43,9 +43,15 @@ def init_db():
                 step TEXT,
                 last_message_id INTEGER,
                 prompt_topic TEXT,
-                current_draft TEXT
+                current_draft TEXT,
+                news_payload TEXT,
+                news_saved_at REAL
             )
         """)
+        # Idempotent: SQLite raises on ADD COLUMN if it already exists. We
+        # guard so old DB files (from before the search add-on) init cleanly.
+        _add_state_column_if_missing(conn, "news_payload", "TEXT")
+        _add_state_column_if_missing(conn, "news_saved_at", "REAL")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,6 +66,12 @@ def init_db():
                 value TEXT NOT NULL
             )
         """)
+
+
+def _add_state_column_if_missing(conn, column_name, column_definition):
+    cols = {row["name"] for row in conn.execute("PRAGMA table_info(state)").fetchall()}
+    if column_name not in cols:
+        conn.execute(f"ALTER TABLE state ADD COLUMN {column_name} {column_definition}")
 
 
 def ensure_token_column(conn, column_name, column_definition):
@@ -123,26 +135,60 @@ def get_state():
         row = conn.execute("SELECT * FROM state WHERE id = 1").fetchone()
         if row:
             return dict(row)
-        return {"step": None, "last_message_id": None, "prompt_topic": None, "current_draft": None}
+        return {
+            "step": None,
+            "last_message_id": None,
+            "prompt_topic": None,
+            "current_draft": None,
+            "news_payload": None,
+            "news_saved_at": None,
+        }
 
 
-def update_state(step=None, last_message_id=None, prompt_topic=None, current_draft=None):
+def update_state(
+    step=None,
+    last_message_id=None,
+    prompt_topic=None,
+    current_draft=None,
+    news_payload=None,
+    news_saved_at=None,
+):
     current = get_state()
     new_step = step if step is not None else current.get("step")
     new_msg_id = last_message_id if last_message_id is not None else current.get("last_message_id")
     new_topic = prompt_topic if prompt_topic is not None else current.get("prompt_topic")
     new_draft = current_draft if current_draft is not None else current.get("current_draft")
+    new_news_payload = news_payload if news_payload is not None else current.get("news_payload")
+    new_news_saved_at = news_saved_at if news_saved_at is not None else current.get("news_saved_at")
 
     with managed_db_connection() as conn:
         conn.execute("""
-            INSERT INTO state (id, step, last_message_id, prompt_topic, current_draft)
-            VALUES (1, ?, ?, ?, ?)
+            INSERT INTO state (
+                id, step, last_message_id, prompt_topic, current_draft,
+                news_payload, news_saved_at
+            )
+            VALUES (1, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 step=excluded.step,
                 last_message_id=excluded.last_message_id,
                 prompt_topic=excluded.prompt_topic,
-                current_draft=excluded.current_draft
-        """, (new_step, new_msg_id, new_topic, new_draft))
+                current_draft=excluded.current_draft,
+                news_payload=excluded.news_payload,
+                news_saved_at=excluded.news_saved_at
+        """, (new_step, new_msg_id, new_topic, new_draft, new_news_payload, new_news_saved_at))
+
+
+def save_news_cache(payload_json: str, saved_at: float):
+    """Persist fetched news items + their timestamp so a restart can
+    still see the selection list and so repeated taps on the same
+    /trending button within TTL avoid re-hitting the search API."""
+    update_state(news_payload=payload_json, news_saved_at=saved_at)
+
+
+def get_news_cache() -> tuple[str | None, float | None]:
+    """Returns ``(payload_json, saved_at)``. Either may be ``None``."""
+    row = get_state()
+    return row.get("news_payload"), row.get("news_saved_at")
 
 
 def reset_state():
