@@ -1,4 +1,5 @@
 import html
+import json
 import secrets
 import sys
 import time
@@ -28,15 +29,27 @@ class TelegramHandler:
         self.groq = GroqClient()
         self.linkedin = LinkedInClient()
 
+    def get_command_keyboard(self) -> dict:
+        return {
+            "keyboard": [
+                [{"text": "/new"}, {"text": "/status"}],
+                [{"text": "/cancel"}, {"text": "/reauth"}],
+            ],
+            "resize_keyboard": True,
+            "is_persistent": True,
+            "selective": False,
+        }
+
     def send_message(self, text: str, reply_markup: dict = None) -> int | None:
         payload = {
             "chat_id": self.user_id,
             "text": text,
             "parse_mode": "HTML",
             "disable_web_page_preview": True,
+            "reply_markup": json.dumps(self.get_command_keyboard()),
         }
         if reply_markup:
-            payload["reply_markup"] = reply_markup
+            payload["reply_markup"] = json.dumps(reply_markup)
 
         try:
             res = requests.post(f"{self.base_url}/sendMessage", json=payload, timeout=30).json()
@@ -98,7 +111,7 @@ class TelegramHandler:
         self.send_message(
             "<b>LinkedIn bot is online.</b>\n\n"
             "Send a topic or draft and I will generate a LinkedIn post for approval.\n\n"
-            "Commands: /new, /cancel, /status, /reauth"
+            "Tap a button below for /new, /cancel, /status, or /reauth."
         )
 
     def sync_offset_to_latest(self):
