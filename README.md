@@ -30,7 +30,10 @@ python run.py
 Telegram Flow
 -------------
 
-- Send any topic or draft to the bot.
+- Tap `Create content` to search current AI trends and get three student-friendly topic choices.
+- Choose `Content 1`, `Content 2`, or `Content 3` to generate a LinkedIn post from that trend.
+- Use `Regenerate Topics` to fetch a new set of trend topics.
+- Or send any topic or draft to the bot.
 - Bot returns a generated LinkedIn post preview.
 - Use buttons: Approve, Regenerate, Edit Draft, Cancel.
 - Approve posts to the authenticated LinkedIn member profile.
@@ -40,6 +43,8 @@ Commands:
 
 - `/start` or `/help` - reset and show usage.
 - `/new` - discard current state and start new post.
+- `Create content` - fetch three current AI trend topics.
+- `Regenerate Topics` - fetch a fresh set of AI trend topics.
 - `/cancel` - discard current draft.
 - `/status` - show current bot state.
 

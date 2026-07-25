@@ -17,6 +17,7 @@ from bot.db import (
 )
 from bot.groq_client import GroqClient
 from bot.linkedin_client import LinkedInClient
+from bot.trend_client import TrendClient
 import setup_linkedin_oauth as oauth
 
 
@@ -28,12 +29,14 @@ class TelegramHandler:
         self.offset = 0
         self.groq = GroqClient()
         self.linkedin = LinkedInClient()
+        self.trends = TrendClient()
 
     def get_command_keyboard(self) -> dict:
         return {
             "keyboard": [
-                [{"text": "/new"}, {"text": "/status"}],
-                [{"text": "/cancel"}, {"text": "/reauth"}],
+                [{"text": "New"}, {"text": "Create content"}],
+                [{"text": "Status"}, {"text": "Regenerate topics"}],
+                [{"text": "Cancel"}, {"text": "Reauth"}],
             ],
             "resize_keyboard": True,
             "is_persistent": True,
@@ -104,14 +107,33 @@ class TelegramHandler:
             ]
         }
 
+    def get_topic_keyboard(self) -> dict:
+        return {
+            "inline_keyboard": [
+                [{"text": "Content 1", "callback_data": "topic_0"}],
+                [{"text": "Content 2", "callback_data": "topic_1"}],
+                [{"text": "Content 3", "callback_data": "topic_2"}],
+                [
+                    {"text": "Regenerate Topics", "callback_data": "topics_regenerate"},
+                    {"text": "Cancel", "callback_data": "cancel"},
+                ],
+            ]
+        }
+
     def format_draft_preview(self, title: str, draft: str) -> str:
         return f"<b>{html.escape(title)}:</b>\n\n{html.escape(draft or '')}"
+
+    def format_topics_preview(self, topics: list[str]) -> str:
+        lines = ["<b>Choose AI topic for LinkedIn post:</b>"]
+        for index, topic in enumerate(topics, start=1):
+            lines.append(f"\n<b>Content {index}</b>\n{html.escape(topic)}")
+        return "\n".join(lines)
 
     def send_ready_message(self):
         self.send_message(
             "<b>LinkedIn bot is online.</b>\n\n"
-            "Send a topic or draft and I will generate a LinkedIn post for approval.\n\n"
-            "Tap a button below for /new, /cancel, /status, or /reauth."
+            "Use Create content for current AI trends, or send any topic/draft.\n\n"
+            "Nothing posts until you approve."
         )
 
     def sync_offset_to_latest(self):
@@ -170,31 +192,40 @@ class TelegramHandler:
         if not text_received:
             self.send_message("Send text topic or draft.")
             return
+        normalized_text = text_received.strip().lower()
 
-        if text_received in {"/start", "/help"}:
+        if normalized_text in {"/start", "/help", "start", "help"}:
             reset_state()
             update_state(step="AWAITING_TOPIC")
             self.send_ready_message()
             return
 
-        if text_received in {"/new", "/reset"}:
+        if normalized_text in {"/new", "/reset", "new", "reset"}:
             reset_state()
             update_state(step="AWAITING_TOPIC")
             self.send_message("Ready. Send new topic or draft.")
             return
 
-        if text_received == "/cancel":
+        if normalized_text in {"/cancel", "cancel"}:
             reset_state()
             update_state(step="AWAITING_TOPIC")
             self.send_message("Current draft discarded. Send new topic or draft.")
             return
 
-        if text_received == "/status":
+        if normalized_text in {"/status", "status"}:
             current_step = get_state().get("step") or "AWAITING_TOPIC"
             self.send_message(f"Current state: <code>{html.escape(current_step)}</code>")
             return
 
-        if text_received == "/reauth":
+        if normalized_text in {"/create", "create", "create content", "trends", "ai trends"}:
+            self.show_trending_topics()
+            return
+
+        if normalized_text in {"/regenerate_topics", "regenerate topics", "new topics", "give it"}:
+            self.show_trending_topics()
+            return
+
+        if normalized_text in {"/reauth", "reauth"}:
             reset_state()
             update_state(step="AWAITING_REAUTH_CODE")
             auth_url = oauth.build_authorization_url(secrets.token_urlsafe(24))
@@ -216,6 +247,8 @@ class TelegramHandler:
             self.process_reauth_code(text_received)
         elif step == "AWAITING_EDIT_INSTRUCTIONS":
             self.edit_draft(text_received, state.get("current_draft"))
+        elif step == "AWAITING_TOPIC_SELECTION":
+            self.send_message("Choose Content 1, Content 2, Content 3, or Regenerate Topics.")
         elif step == "AWAITING_APPROVAL":
             self.send_message("Draft is waiting for approval. Use buttons, or send /new to start over.")
         else:
@@ -223,13 +256,47 @@ class TelegramHandler:
             update_state(step="AWAITING_TOPIC")
             self.generate_draft(text_received)
 
-    def generate_draft(self, topic_or_draft: str):
-        self.send_message("<i>Generating LinkedIn draft...</i>")
+    def show_trending_topics(self, message_id: int | None = None):
+        status = "<i>Searching current AI trends for student-friendly topics...</i>"
+        if message_id:
+            self.edit_message(message_id, status)
+        else:
+            self.send_message(status)
+
+        try:
+            topics = self.trends.fetch_topics(limit=3)
+            update_state(step="AWAITING_TOPIC_SELECTION", trending_topics=topics)
+            preview_text = self.format_topics_preview(topics)
+            if message_id:
+                self.edit_message(message_id, preview_text, reply_markup=self.get_topic_keyboard())
+            else:
+                msg_id = self.send_message(preview_text, reply_markup=self.get_topic_keyboard())
+                update_state(last_message_id=msg_id)
+        except Exception as e:
+            self.send_message(f"Error finding trends: <code>{html.escape(str(e))}</code>")
+
+    def generate_draft_from_topic_choice(self, message_id: int, state: dict, topic_index: int):
+        topics = state.get("trending_topics") or []
+        if topic_index >= len(topics):
+            self.send_message("Topic expired. Tap Create content again.")
+            return
+
+        topic = topics[topic_index]
+        self.edit_message(message_id, f"<i>Generating post from Content {topic_index + 1}...</i>")
+        self.generate_draft(topic, message_id=message_id)
+
+    def generate_draft(self, topic_or_draft: str, message_id: int | None = None):
+        if not message_id:
+            self.send_message("<i>Generating LinkedIn draft...</i>")
         try:
             draft = self.groq.generate_post(topic_or_draft)
             update_state(step="AWAITING_APPROVAL", prompt_topic=topic_or_draft, current_draft=draft)
             preview_text = self.format_draft_preview("Generated Post Preview", draft)
-            msg_id = self.send_message(preview_text, reply_markup=self.get_approval_keyboard())
+            if message_id:
+                self.edit_message(message_id, preview_text, reply_markup=self.get_approval_keyboard())
+                msg_id = message_id
+            else:
+                msg_id = self.send_message(preview_text, reply_markup=self.get_approval_keyboard())
             update_state(last_message_id=msg_id)
         except Exception as e:
             self.send_message(f"Error generating post: <code>{html.escape(str(e))}</code>")
@@ -268,6 +335,10 @@ class TelegramHandler:
             reset_state()
             update_state(step="AWAITING_TOPIC")
             self.send_message("Ready for next post. Send topic or draft anytime.")
+        elif data == "topics_regenerate":
+            self.show_trending_topics(message_id=message_id)
+        elif data.startswith("topic_"):
+            self.generate_draft_from_topic_choice(message_id, state, int(data.split("_", 1)[1]))
 
     def process_reauth_code(self, code: str):
         self.send_message("<i>Exchanging authorization code for new tokens...</i>")

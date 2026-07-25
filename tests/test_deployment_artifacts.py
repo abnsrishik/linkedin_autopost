@@ -57,6 +57,7 @@ class DeploymentArtifactsTest(unittest.TestCase):
             "LINKEDIN_CLIENT_SECRET",
             "LINKEDIN_REDIRECT_URI",
             "LINKEDIN_VERSION",
+            "TREND_SEARCH_QUERY",
         ]:
             self.assertIn(var, contents, f"{var} missing from .env.example")
 

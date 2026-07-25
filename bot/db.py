@@ -1,5 +1,6 @@
 import sqlite3
 import time
+import json
 from contextlib import contextmanager
 
 from config import DB_PATH
@@ -43,9 +44,11 @@ def init_db():
                 step TEXT,
                 last_message_id INTEGER,
                 prompt_topic TEXT,
-                current_draft TEXT
+                current_draft TEXT,
+                trending_topics TEXT
             )
         """)
+        ensure_state_column(conn, "trending_topics", "TEXT")
         conn.execute("""
             CREATE TABLE IF NOT EXISTS history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -66,6 +69,12 @@ def ensure_token_column(conn, column_name, column_definition):
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(tokens)").fetchall()}
     if column_name not in columns:
         conn.execute(f"ALTER TABLE tokens ADD COLUMN {column_name} {column_definition}")
+
+
+def ensure_state_column(conn, column_name, column_definition):
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(state)").fetchall()}
+    if column_name not in columns:
+        conn.execute(f"ALTER TABLE state ADD COLUMN {column_name} {column_definition}")
 
 
 def save_tokens(
@@ -122,27 +131,45 @@ def get_state():
     with managed_db_connection() as conn:
         row = conn.execute("SELECT * FROM state WHERE id = 1").fetchone()
         if row:
-            return dict(row)
-        return {"step": None, "last_message_id": None, "prompt_topic": None, "current_draft": None}
+            state = dict(row)
+            state["trending_topics"] = json.loads(state["trending_topics"] or "[]")
+            return state
+        return {
+            "step": None,
+            "last_message_id": None,
+            "prompt_topic": None,
+            "current_draft": None,
+            "trending_topics": [],
+        }
 
 
-def update_state(step=None, last_message_id=None, prompt_topic=None, current_draft=None):
+def update_state(
+    step=None,
+    last_message_id=None,
+    prompt_topic=None,
+    current_draft=None,
+    trending_topics=None,
+):
     current = get_state()
     new_step = step if step is not None else current.get("step")
     new_msg_id = last_message_id if last_message_id is not None else current.get("last_message_id")
     new_topic = prompt_topic if prompt_topic is not None else current.get("prompt_topic")
     new_draft = current_draft if current_draft is not None else current.get("current_draft")
+    new_trending_topics = (
+        trending_topics if trending_topics is not None else current.get("trending_topics", [])
+    )
 
     with managed_db_connection() as conn:
         conn.execute("""
-            INSERT INTO state (id, step, last_message_id, prompt_topic, current_draft)
-            VALUES (1, ?, ?, ?, ?)
+            INSERT INTO state (id, step, last_message_id, prompt_topic, current_draft, trending_topics)
+            VALUES (1, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 step=excluded.step,
                 last_message_id=excluded.last_message_id,
                 prompt_topic=excluded.prompt_topic,
-                current_draft=excluded.current_draft
-        """, (new_step, new_msg_id, new_topic, new_draft))
+                current_draft=excluded.current_draft,
+                trending_topics=excluded.trending_topics
+        """, (new_step, new_msg_id, new_topic, new_draft, json.dumps(new_trending_topics)))
 
 
 def reset_state():

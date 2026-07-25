@@ -27,6 +27,11 @@ LINKEDIN_CLIENT_SECRET = os.getenv("LINKEDIN_CLIENT_SECRET")
 LINKEDIN_REDIRECT_URI = os.getenv("LINKEDIN_REDIRECT_URI", "http://localhost:8080/callback")
 LINKEDIN_VERSION = os.getenv("LINKEDIN_VERSION", "202604")
 
+TREND_SEARCH_QUERY = os.getenv(
+    "TREND_SEARCH_QUERY",
+    "AI OR artificial intelligence student learning tools careers technology",
+)
+
 
 def validate_config():
     missing = []
