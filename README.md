@@ -38,6 +38,7 @@ Telegram Flow
 - Use buttons: Approve, Regenerate, Edit Draft, Cancel.
 - Approve posts to the authenticated LinkedIn member profile.
 - Bot stays online after posting and waits for next topic.
+- On Render, use `Reauth` once after deploy so the deployed bot stores LinkedIn tokens on the server.
 
 Commands:
 
@@ -47,6 +48,18 @@ Commands:
 - `Regenerate Topics` - fetch a fresh set of AI trend topics.
 - `/cancel` - discard current draft.
 - `/status` - show current bot state.
+
+Render Notes
+------------
+
+Render deploys do not reuse your local `data/state.db`. After deploying:
+
+1. Add all required environment variables in Render.
+2. Add `TAVILY_API_KEY` to use Tavily for fresher daily AI trends.
+3. Attach a persistent disk and set `DB_PATH` to that disk, for example `/var/data/state.db`.
+4. Send `Reauth` to the Telegram bot, open the LinkedIn authorization link, and paste the returned `code` value back into Telegram.
+
+Without a persistent `DB_PATH`, LinkedIn OAuth tokens can disappear after Render restarts or redeploys.
 
 AWS 24/7 Deployment
 -------------------

@@ -41,7 +41,7 @@ class FakeTrends:
             ],
         ]
 
-    def fetch_topics(self, limit=3):
+    def fetch_topics(self, limit=3, exclude_topics=None):
         topics = self.topic_sets[self.fetch_calls % len(self.topic_sets)]
         self.fetch_calls += 1
         return topics[:limit]

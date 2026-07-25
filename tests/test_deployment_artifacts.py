@@ -58,6 +58,9 @@ class DeploymentArtifactsTest(unittest.TestCase):
             "LINKEDIN_REDIRECT_URI",
             "LINKEDIN_VERSION",
             "TREND_SEARCH_QUERY",
+            "TAVILY_API_KEY",
+            "TAVILY_TIME_RANGE",
+            "DB_PATH",
         ]:
             self.assertIn(var, contents, f"{var} missing from .env.example")
 

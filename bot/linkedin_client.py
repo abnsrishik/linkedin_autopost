@@ -14,7 +14,10 @@ class LinkedInClient:
     def refresh_access_token_if_needed(self):
         token_data = get_tokens()
         if not token_data:
-            raise Exception("No OAuth tokens found. Send /reauth or run setup_linkedin_oauth.py.")
+            raise Exception(
+                "No OAuth tokens found on this server. Send Reauth in Telegram and paste the LinkedIn code. "
+                "On Render, set DB_PATH to a persistent disk path so tokens survive redeploys."
+            )
 
         if time.time() < (token_data["expires_at"] - 300):
             return token_data["access_token"]

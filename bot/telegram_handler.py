@@ -264,7 +264,8 @@ class TelegramHandler:
             self.send_message(status)
 
         try:
-            topics = self.trends.fetch_topics(limit=3)
+            current_topics = get_state().get("trending_topics") or []
+            topics = self.trends.fetch_topics(limit=3, exclude_topics=current_topics)
             update_state(step="AWAITING_TOPIC_SELECTION", trending_topics=topics)
             preview_text = self.format_topics_preview(topics)
             if message_id:

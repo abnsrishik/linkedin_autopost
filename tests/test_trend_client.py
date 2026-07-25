@@ -17,7 +17,7 @@ class TrendClientTest(unittest.TestCase):
 </channel></rss>"""
         get.return_value = response
 
-        topics = TrendClient(query="AI students").fetch_topics()
+        topics = TrendClient(query="AI students", tavily_api_key=None).fetch_topics()
 
         self.assertEqual(
             [
@@ -25,6 +25,57 @@ class TrendClientTest(unittest.TestCase):
                 "Students use AI agents for project work",
                 "New AI coding tools for beginners",
             ],
+            topics,
+        )
+
+    @patch("bot.trend_client.requests.post")
+    def test_fetch_topics_uses_tavily_when_api_key_is_present(self, post):
+        response = Mock()
+        response.status_code = 200
+        response.json.return_value = {
+            "results": [
+                {"title": "AI note-taking tools help students manage classes"},
+                {"title": "AI career coaches move into college job searches"},
+                {"title": "Students use AI scheduling assistants in daily life"},
+            ]
+        }
+        post.return_value = response
+
+        topics = TrendClient(query="AI students", tavily_api_key="tvly-test").fetch_topics()
+
+        self.assertEqual(
+            [
+                "AI note-taking tools help students manage classes",
+                "AI career coaches move into college job searches",
+                "Students use AI scheduling assistants in daily life",
+            ],
+            topics,
+        )
+        _, kwargs = post.call_args
+        self.assertEqual("Bearer tvly-test", kwargs["headers"]["Authorization"])
+        self.assertEqual("news", kwargs["json"]["topic"])
+        self.assertEqual("day", kwargs["json"]["time_range"])
+
+    @patch("bot.trend_client.requests.post")
+    def test_fetch_topics_excludes_previous_topics_for_regeneration(self, post):
+        response = Mock()
+        response.status_code = 200
+        response.json.return_value = {
+            "results": [
+                {"title": "Repeated AI topic"},
+                {"title": "Fresh AI study topic"},
+                {"title": "Fresh AI career topic"},
+                {"title": "Fresh AI daily life topic"},
+            ]
+        }
+        post.return_value = response
+
+        topics = TrendClient(tavily_api_key="tvly-test").fetch_topics(
+            exclude_topics=["Repeated AI topic"]
+        )
+
+        self.assertEqual(
+            ["Fresh AI study topic", "Fresh AI career topic", "Fresh AI daily life topic"],
             topics,
         )
 

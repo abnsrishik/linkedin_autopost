@@ -6,7 +6,7 @@ load_dotenv()
 
 BASE_DIR = Path(__file__).resolve().parent
 
-DB_PATH = BASE_DIR / "data" / "state.db"
+DB_PATH = Path(os.getenv("DB_PATH") or BASE_DIR / "data" / "state.db")
 LOG_PATH = BASE_DIR / "logs" / "autoposter.log"
 
 # Ensure runtime directories exist
@@ -29,8 +29,10 @@ LINKEDIN_VERSION = os.getenv("LINKEDIN_VERSION", "202604")
 
 TREND_SEARCH_QUERY = os.getenv(
     "TREND_SEARCH_QUERY",
-    "AI OR artificial intelligence student learning tools careers technology",
+    "latest AI tools for students daily life learning careers productivity",
 )
+TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
+TAVILY_TIME_RANGE = os.getenv("TAVILY_TIME_RANGE", "day")
 
 
 def validate_config():
