@@ -52,6 +52,8 @@ Commands:
 Render Notes
 ------------
 
+If deployed as a Render Web Service, the app binds a small health server to Render's `PORT` while the Telegram polling loop runs. If you deploy as a Render Background Worker instead, no public port is required.
+
 Render deploys do not reuse your local `data/state.db`. After deploying:
 
 1. Add all required environment variables in Render.
