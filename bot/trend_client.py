@@ -22,13 +22,15 @@ class TrendClient:
     def fetch_topics(self, limit: int = 3, exclude_topics: list[str] | None = None) -> list[str]:
         excluded = {topic.lower() for topic in (exclude_topics or [])}
         if self.tavily_api_key:
-            try:
-                return self._fetch_tavily_topics(limit, excluded)
-            except Exception:
-                if not excluded:
-                    raise
+            topics = self._fetch_tavily_topics(limit, excluded)
+            if len(topics) < limit:
+                topics = self._supplement_topics(topics, limit, excluded)
+            return topics[:limit]
 
-        return self._fetch_google_news_topics(limit, excluded)
+        topics = self._fetch_google_news_topics(limit, excluded)
+        if len(topics) < limit:
+            topics = self._supplement_topics(topics, limit, excluded)
+        return topics[:limit]
 
     def _fetch_tavily_topics(self, limit: int, excluded: set[str]) -> list[str]:
         payload = {
@@ -38,7 +40,7 @@ class TrendClient:
             "search_depth": "basic",
             "include_answer": False,
             "include_raw_content": False,
-            "max_results": 10,
+            "max_results": 20,
         }
         headers = {
             "Authorization": f"Bearer {self.tavily_api_key}",
@@ -53,8 +55,6 @@ class TrendClient:
             limit,
             excluded,
         )
-        if len(topics) < limit:
-            raise Exception("Tavily did not return enough fresh AI topics. Try Regenerate Topics again.")
         return topics
 
     def _fetch_google_news_topics(self, limit: int, excluded: set[str]) -> list[str]:
@@ -73,8 +73,21 @@ class TrendClient:
             limit,
             excluded,
         )
+        return topics
+
+    def _supplement_topics(self, topics: list[str], limit: int, excluded: set[str]) -> list[str]:
+        used = excluded | {topic.lower() for topic in topics}
+        candidates = self._daily_life_ai_topics()
+        for topic in candidates:
+            key = topic.lower()
+            if key not in used:
+                topics.append(topic)
+                used.add(key)
+            if len(topics) == limit:
+                break
+
         if len(topics) < limit:
-            raise Exception("Trend search did not return enough fresh AI topics. Try again later.")
+            raise Exception("Trend search did not return enough AI topics. Try again later.")
         return topics
 
     def _unique_clean_titles(self, titles, limit: int, excluded: set[str]) -> list[str]:
@@ -107,3 +120,12 @@ class TrendClient:
         title = re.sub(r"\s+[-|]\s+[^-|]+$", "", title).strip()
         title = re.sub(r"\s+", " ", title)
         return title
+
+    def _daily_life_ai_topics(self) -> list[str]:
+        return [
+            "How students can use AI to plan daily study sessions without losing focus",
+            "AI note-taking workflows that help students revise faster before exams",
+            "Using AI career tools to prepare resumes, projects, and interview practice",
+            "How AI assistants can help students manage assignments, deadlines, and habits",
+            "Practical AI tools students can use for research, coding, and presentations",
+        ]

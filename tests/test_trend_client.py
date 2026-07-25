@@ -79,6 +79,25 @@ class TrendClientTest(unittest.TestCase):
             topics,
         )
 
+    @patch("bot.trend_client.requests.post")
+    def test_fetch_topics_supplements_when_tavily_returns_too_few_unique_results(self, post):
+        response = Mock()
+        response.status_code = 200
+        response.json.return_value = {
+            "results": [
+                {"title": "Repeated AI topic"},
+                {"title": "Repeated AI topic"},
+            ]
+        }
+        post.return_value = response
+
+        topics = TrendClient(tavily_api_key="tvly-test").fetch_topics(
+            exclude_topics=["Repeated AI topic"]
+        )
+
+        self.assertEqual(3, len(topics))
+        self.assertIn("How students can use AI to plan daily study sessions without losing focus", topics)
+
 
 if __name__ == "__main__":
     unittest.main()

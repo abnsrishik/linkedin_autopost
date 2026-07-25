@@ -266,7 +266,12 @@ class TelegramHandler:
         try:
             current_topics = get_state().get("trending_topics") or []
             topics = self.trends.fetch_topics(limit=3, exclude_topics=current_topics)
-            update_state(step="AWAITING_TOPIC_SELECTION", trending_topics=topics)
+            update_state(
+                step="AWAITING_TOPIC_SELECTION",
+                prompt_topic="",
+                current_draft="",
+                trending_topics=topics,
+            )
             preview_text = self.format_topics_preview(topics)
             if message_id:
                 self.edit_message(message_id, preview_text, reply_markup=self.get_topic_keyboard())

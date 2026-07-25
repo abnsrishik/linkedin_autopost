@@ -161,6 +161,7 @@ class TelegramFlowTest(unittest.TestCase):
     def test_regenerate_topics_replaces_topic_choices(self):
         handler = CapturingTelegramHandler()
 
+        db.update_state(step="AWAITING_APPROVAL", prompt_topic="Old topic", current_draft="Old draft")
         handler.handle_text_message({"chat": {"id": handler.user_id}, "text": "Create content"})
         handler.handle_callback_query(
             {
@@ -171,6 +172,7 @@ class TelegramFlowTest(unittest.TestCase):
 
         state = db.get_state()
         self.assertEqual("AI internships now require prompt engineering", state["trending_topics"][0])
+        self.assertEqual("", state["current_draft"])
         self.assertIn("AI internships", handler.edited_messages[-1]["text"])
 
 
