@@ -29,7 +29,7 @@ LINKEDIN_VERSION = os.getenv("LINKEDIN_VERSION", "202604")
 
 TREND_SEARCH_QUERY = os.getenv(
     "TREND_SEARCH_QUERY",
-    "latest AI tools for students daily life learning careers productivity",
+    "latest artificial intelligence news today OR OpenAI OR Anthropic OR Google DeepMind OR Microsoft AI OR Meta AI OR DeepSeek OR Alibaba QWEN OR Z.ai / Zhipu AI GLM OR Moonshot AI Kimmi K Series OR MiniMax"
 )
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY")
 TAVILY_TIME_RANGE = os.getenv("TAVILY_TIME_RANGE", "day")

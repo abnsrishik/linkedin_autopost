@@ -2,11 +2,26 @@ import html
 import re
 import urllib.parse
 import xml.etree.ElementTree as ET
+from urllib.parse import urlparse
 
 import requests
 
 from config import TAVILY_API_KEY, TAVILY_TIME_RANGE, TREND_SEARCH_QUERY
 
+TRUSTED_DOMAINS = {
+    "openai.com",
+    "anthropic.com",
+    "deepmind.google",
+    "ai.google",
+    "huggingface.co",
+    "techcrunch.com",
+    "venturebeat.com",
+    "theverge.com",
+    "technologyreview.com",
+    "microsoft.com",
+    "blogs.nvidia.com",
+    "meta.com",
+}
 
 class TrendClient:
     def __init__(
@@ -37,9 +52,9 @@ class TrendClient:
             "query": self.query,
             "topic": "news",
             "time_range": self.time_range,
-            "search_depth": "basic",
+            "search_depth": "advanced",
             "include_answer": False,
-            "include_raw_content": False,
+            "include_raw_content": True,
             "max_results": 20,
         }
         headers = {
@@ -50,12 +65,54 @@ class TrendClient:
         if response.status_code != 200:
             raise Exception(f"Tavily trend search failed: {response.status_code} - {response.text}")
 
-        topics = self._unique_clean_titles(
-            (result.get("title") for result in response.json().get("results", [])),
-            limit,
-            excluded,
-        )
-        return topics
+        results = response.json().get("results", [])
+
+        research = []
+
+        seen = set()
+
+        for result in results:
+
+            title = self._clean_title(result.get("title", ""))
+
+            if not title:
+                continue
+
+            if title.lower() in seen:
+                continue
+
+            if title.lower() in excluded:
+                continue
+
+            seen.add(title.lower())
+
+            content = (
+                result.get("raw_content")
+                or result.get("content")
+                or ""
+            )
+
+            url = result.get("url", "")
+
+            published = (
+                result.get("published_date")
+                or result.get("published")
+                or ""
+            )
+
+            research.append(
+                {
+                    "title": title,
+                    "content": content,
+                    "url": url,
+                    "published": published,
+                }
+            )
+
+            if len(research) == limit:
+                break
+
+            return research
 
     def _fetch_google_news_topics(self, limit: int, excluded: set[str]) -> list[str]:
         url = self._build_google_news_rss_url()
@@ -129,3 +186,104 @@ class TrendClient:
             "How AI assistants can help students manage assignments, deadlines, and habits",
             "Practical AI tools students can use for research, coding, and presentations",
         ]
+    def _expand_queries(self, topic: str) -> list[str]:
+        return [
+            topic,
+            f"Latest {topic} news",
+            f"{topic} announcements",
+            f"{topic} tutorial",
+            f"{topic} GitHub",
+        ]
+    
+    def fetch_topic_research(self, topic: str) -> str:
+
+        if not self.tavily_api_key:
+            return topic
+        
+
+
+        all_results = []
+        for query in self._expand_queries(topic):
+
+            payload = {
+                "query": query,
+                "topic": "general",
+                "search_depth": "advanced",
+                "include_answer": True,
+                "include_raw_content": True,
+                "max_results": 5,
+            }
+
+            response = requests.post(
+                "https://api.tavily.com/search",
+                headers=headers,
+                json=payload,
+                timeout=30,
+            )
+
+            if response.status_code == 200:
+                all_results.extend(response.json().get("results", []))
+        headers = {
+            "Authorization": f"Bearer {self.tavily_api_key}",
+            "Content-Type": "application/json",
+        }
+
+        response = requests.post(
+            "https://api.tavily.com/search",
+            headers=headers,
+            json=payload,
+            timeout=30,
+        )
+
+        if response.status_code != 200:
+            return topic
+
+        data = response.json()
+
+        research = []
+
+        if data.get("answer"):
+            research.append(data["answer"])
+
+        for result in data.get("results", []):
+
+            title = result.get("title", "")
+            content = (
+                result.get("raw_content")
+                or result.get("content")
+                or ""
+            )
+
+            url = result.get("url", "")
+
+            domain = urlparse(url).netloc.lower()
+            if domain.startswith("www."):
+                domain = domain[4:]
+            if not any(domain.endswith(d) for d in TRUSTED_DOMAINS):
+                continue
+            
+            seen_titles = set()
+            normalized = title.lower().strip()
+            if normalized in seen_titles:
+                continue
+            seen_titles.add(normalized)
+
+            research.append(
+    f"""
+========== ARTICLE ==========
+
+Title:
+{title}
+
+Summary:
+{content}
+
+Source:
+{url}
+
+Published:
+{result.get("published_date", "")}
+
+=============================
+"""
+)

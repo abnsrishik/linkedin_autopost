@@ -126,7 +126,8 @@ class TelegramHandler:
     def format_topics_preview(self, topics: list[str]) -> str:
         lines = ["<b>Choose AI topic for LinkedIn post:</b>"]
         for index, topic in enumerate(topics, start=1):
-            lines.append(f"\n<b>Content {index}</b>\n{html.escape(topic)}")
+            title = topic["title"] if isinstance(topic, dict) else topic
+            lines.append(f"\n<b>Content {index}</b>\n{html.escape(title)}")
         return "\n".join(lines)
 
     def send_ready_message(self):
@@ -287,7 +288,28 @@ class TelegramHandler:
             self.send_message("Topic expired. Tap Create content again.")
             return
 
-        topic = topics[topic_index]
+        selected = topics[topic_index]
+
+        if isinstance(selected, dict):
+
+            topic = f"""
+        Title:
+        {selected['title']}
+
+        Research:
+
+        {selected['content']}
+
+        Source:
+
+        {selected['url']}
+
+        Published:
+
+        {selected['published']}
+        """
+        else:
+            topic = selected
         self.edit_message(message_id, f"<i>Generating post from Content {topic_index + 1}...</i>")
         self.generate_draft(topic, message_id=message_id)
 
@@ -295,7 +317,9 @@ class TelegramHandler:
         if not message_id:
             self.send_message("<i>Generating LinkedIn draft...</i>")
         try:
-            draft = self.groq.generate_post(topic_or_draft)
+            research = self.trends.fetch_topic_research(topic_or_draft)
+            print(research)
+            draft = self.groq.generate_post(research)
             update_state(step="AWAITING_APPROVAL", prompt_topic=topic_or_draft, current_draft=draft)
             preview_text = self.format_draft_preview("Generated Post Preview", draft)
             if message_id:
