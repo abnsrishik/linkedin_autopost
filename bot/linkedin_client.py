@@ -1,9 +1,14 @@
+import json
+import logging
 import time
 
 import requests
+from requests import ConnectionError, Timeout
 
 from config import LINKEDIN_CLIENT_ID, LINKEDIN_CLIENT_SECRET, LINKEDIN_VERSION
 from bot.db import get_tokens, save_tokens
+
+logger = logging.getLogger(__name__)
 
 
 class LinkedInClient:
@@ -12,6 +17,7 @@ class LinkedInClient:
         self.client_secret = LINKEDIN_CLIENT_SECRET
 
     def refresh_access_token_if_needed(self):
+        logger.info("stage=linkedin.refresh status=started")
         token_data = get_tokens()
         if not token_data:
             raise Exception(
@@ -20,6 +26,7 @@ class LinkedInClient:
             )
 
         if time.time() < (token_data["expires_at"] - 300):
+            logger.info("stage=linkedin.refresh status=skipped reason=access_token_valid")
             return token_data["access_token"]
 
         if not token_data.get("refresh_token"):
@@ -28,7 +35,7 @@ class LinkedInClient:
         if time.time() >= token_data["refresh_expires_at"]:
             raise Exception("LinkedIn refresh token expired. Send /reauth or run setup_linkedin_oauth.py again.")
 
-        print("Refreshing LinkedIn access token...")
+        logger.info("stage=linkedin.refresh status=request")
         url = "https://www.linkedin.com/oauth/v2/accessToken"
         payload = {
             "grant_type": "refresh_token",
@@ -38,11 +45,31 @@ class LinkedInClient:
         }
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
 
-        response = requests.post(url, data=payload, headers=headers, timeout=30)
+        try:
+            response = requests.post(url, data=payload, headers=headers, timeout=30)
+        except Timeout as exc:
+            logger.exception("stage=linkedin.refresh status=failed reason=timeout")
+            raise RuntimeError("LinkedIn token refresh timed out.") from exc
+        except ConnectionError as exc:
+            logger.exception("stage=linkedin.refresh status=failed reason=connection_error")
+            raise RuntimeError("LinkedIn token refresh connection failed.") from exc
+        except requests.RequestException as exc:
+            logger.exception("stage=linkedin.refresh status=failed reason=request_exception")
+            raise RuntimeError(f"LinkedIn token refresh request failed: {exc}") from exc
+
+        logger.info("stage=linkedin.refresh status=response status_code=%s", response.status_code)
         if response.status_code != 200:
             raise Exception(f"Failed to refresh access token: {response.status_code} - {response.text}")
 
-        data = response.json()
+        try:
+            data = response.json()
+        except json.JSONDecodeError as exc:
+            logger.exception("stage=linkedin.refresh status=failed reason=invalid_json")
+            raise RuntimeError(f"LinkedIn token refresh returned invalid JSON: {response.text[:500]}") from exc
+
+        if "access_token" not in data or "expires_in" not in data:
+            raise RuntimeError(f"LinkedIn token refresh response missing required fields: {data}")
+
         save_tokens(
             access_token=data["access_token"],
             refresh_token=data.get("refresh_token", token_data["refresh_token"]),
@@ -54,9 +81,11 @@ class LinkedInClient:
             author_urn=token_data["author_urn"],
             author_type="member",
         )
+        logger.info("stage=linkedin.refresh status=completed")
         return data["access_token"]
 
     def publish_post(self, commentary: str) -> str:
+        logger.info("stage=linkedin.publish status=started chars=%s", len(commentary or ""))
         access_token = self.refresh_access_token_if_needed()
         token_data = get_tokens()
         author_urn = token_data.get("author_urn")
@@ -86,11 +115,24 @@ class LinkedInClient:
             "isReshareDisabledByAuthor": False,
         }
 
-        response = requests.post(url, headers=headers, json=payload, timeout=30)
+        try:
+            response = requests.post(url, headers=headers, json=payload, timeout=30)
+        except Timeout as exc:
+            logger.exception("stage=linkedin.publish status=failed reason=timeout")
+            raise RuntimeError("LinkedIn publish timed out.") from exc
+        except ConnectionError as exc:
+            logger.exception("stage=linkedin.publish status=failed reason=connection_error")
+            raise RuntimeError("LinkedIn publish connection failed.") from exc
+        except requests.RequestException as exc:
+            logger.exception("stage=linkedin.publish status=failed reason=request_exception")
+            raise RuntimeError(f"LinkedIn publish request failed: {exc}") from exc
+
+        logger.info("stage=linkedin.publish status=response status_code=%s", response.status_code)
         if response.status_code != 201:
             raise Exception(f"LinkedIn publication failed: {response.status_code} - {response.text}")
 
         post_urn = response.headers.get("x-restli-id") or response.headers.get("X-RestLi-Id")
         if not post_urn:
             raise Exception("LinkedIn publication succeeded but did not return X-RestLi-Id header.")
+        logger.info("stage=linkedin.publish status=completed post_urn=%s", post_urn)
         return post_urn

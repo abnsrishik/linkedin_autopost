@@ -1,23 +1,38 @@
 import unittest
-from unittest.mock import Mock, patch
 
+from bot.research.models import ResearchBundle, TrendingTopic
 from bot.trend_client import TrendClient
 
 
-class TrendClientTest(unittest.TestCase):
-    @patch("bot.trend_client.requests.get")
-    def test_fetch_topics_reads_google_news_rss(self, get):
-        response = Mock()
-        response.status_code = 200
-        response.content = b"""<?xml version="1.0"?>
-<rss><channel>
-<item><title>AI tutors are changing study habits - Example News</title></item>
-<item><title>Students use AI agents for project work | Example News</title></item>
-<item><title>New AI coding tools for beginners - Example News</title></item>
-</channel></rss>"""
-        get.return_value = response
+class FakeRouter:
+    def __init__(self):
+        self.trending_calls = []
+        self.research_calls = []
 
-        topics = TrendClient(query="AI students", tavily_api_key=None).fetch_topics()
+    def trending_topics(self, limit=3, exclude_topics=None):
+        self.trending_calls.append((limit, exclude_topics))
+        return [
+            TrendingTopic(
+                title="AI tutors are changing study habits",
+                url="https://example.com/1",
+                provider="test",
+            ),
+            {"title": "Students use AI agents for project work"},
+            "New AI coding tools for beginners",
+        ][:limit]
+
+    def research(self, topic):
+        self.research_calls.append(topic)
+        return ResearchBundle(query=topic)
+
+
+class TrendClientTest(unittest.TestCase):
+    def test_fetch_topics_delegates_to_router_and_returns_legacy_titles(self):
+        router = FakeRouter()
+        topics = TrendClient(router=router).fetch_topics(
+            limit=3,
+            exclude_topics=["Old topic"],
+        )
 
         self.assertEqual(
             [
@@ -27,76 +42,25 @@ class TrendClientTest(unittest.TestCase):
             ],
             topics,
         )
+        self.assertEqual([(3, ["Old topic"])], router.trending_calls)
 
-    @patch("bot.trend_client.requests.post")
-    def test_fetch_topics_uses_tavily_when_api_key_is_present(self, post):
-        response = Mock()
-        response.status_code = 200
-        response.json.return_value = {
-            "results": [
-                {"title": "AI note-taking tools help students manage classes"},
-                {"title": "AI career coaches move into college job searches"},
-                {"title": "Students use AI scheduling assistants in daily life"},
-            ]
-        }
-        post.return_value = response
+    def test_fetch_topic_research_delegates_to_router(self):
+        router = FakeRouter()
+        bundle = TrendClient(router=router).fetch_topic_research("AI automation")
 
-        topics = TrendClient(query="AI students", tavily_api_key="tvly-test").fetch_topics()
+        self.assertEqual("AI automation", bundle.query)
+        self.assertEqual(["AI automation"], router.research_calls)
 
-        self.assertEqual(
-            [
-                "AI note-taking tools help students manage classes",
-                "AI career coaches move into college job searches",
-                "Students use AI scheduling assistants in daily life",
-            ],
-            topics,
-        )
-        _, kwargs = post.call_args
-        self.assertEqual("Bearer tvly-test", kwargs["headers"]["Authorization"])
-        self.assertEqual("news", kwargs["json"]["topic"])
-        self.assertEqual("day", kwargs["json"]["time_range"])
-
-    @patch("bot.trend_client.requests.post")
-    def test_fetch_topics_excludes_previous_topics_for_regeneration(self, post):
-        response = Mock()
-        response.status_code = 200
-        response.json.return_value = {
-            "results": [
-                {"title": "Repeated AI topic"},
-                {"title": "Fresh AI study topic"},
-                {"title": "Fresh AI career topic"},
-                {"title": "Fresh AI daily life topic"},
-            ]
-        }
-        post.return_value = response
-
-        topics = TrendClient(tavily_api_key="tvly-test").fetch_topics(
-            exclude_topics=["Repeated AI topic"]
-        )
-
-        self.assertEqual(
-            ["Fresh AI study topic", "Fresh AI career topic", "Fresh AI daily life topic"],
-            topics,
-        )
-
-    @patch("bot.trend_client.requests.post")
-    def test_fetch_topics_supplements_when_tavily_returns_too_few_unique_results(self, post):
-        response = Mock()
-        response.status_code = 200
-        response.json.return_value = {
-            "results": [
-                {"title": "Repeated AI topic"},
-                {"title": "Repeated AI topic"},
-            ]
-        }
-        post.return_value = response
-
-        topics = TrendClient(tavily_api_key="tvly-test").fetch_topics(
-            exclude_topics=["Repeated AI topic"]
-        )
+    def test_legacy_constructor_kwargs_do_not_restore_http_logic(self):
+        router = FakeRouter()
+        topics = TrendClient(
+            router=router,
+            query="AI students",
+            tavily_api_key="tvly-test",
+        ).fetch_topics()
 
         self.assertEqual(3, len(topics))
-        self.assertIn("How students can use AI to plan daily study sessions without losing focus", topics)
+        self.assertEqual([(3, None)], router.trending_calls)
 
 
 if __name__ == "__main__":

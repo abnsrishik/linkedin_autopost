@@ -1,7 +1,9 @@
 import sqlite3
 import time
 import json
+from dataclasses import asdict, is_dataclass
 from contextlib import contextmanager
+from datetime import datetime
 
 from config import DB_PATH
 
@@ -132,7 +134,7 @@ def get_state():
         row = conn.execute("SELECT * FROM state WHERE id = 1").fetchone()
         if row:
             state = dict(row)
-            state["trending_topics"] = json.loads(state["trending_topics"] or "[]")
+            state["trending_topics"] = _load_trending_topics(state["trending_topics"])
             return state
         return {
             "step": None,
@@ -169,7 +171,25 @@ def update_state(
                 prompt_topic=excluded.prompt_topic,
                 current_draft=excluded.current_draft,
                 trending_topics=excluded.trending_topics
-        """, (new_step, new_msg_id, new_topic, new_draft, json.dumps(new_trending_topics)))
+        """, (new_step, new_msg_id, new_topic, new_draft, json.dumps(new_trending_topics, default=_json_default)))
+
+
+def _json_default(value):
+    if is_dataclass(value):
+        return asdict(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+
+
+def _load_trending_topics(raw_value):
+    if not raw_value:
+        return []
+    try:
+        value = json.loads(raw_value)
+    except json.JSONDecodeError:
+        return []
+    return value if isinstance(value, list) else []
 
 
 def reset_state():

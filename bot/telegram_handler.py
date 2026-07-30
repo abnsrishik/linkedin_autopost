@@ -1,5 +1,6 @@
 import html
 import json
+import logging
 import secrets
 import sys
 import time
@@ -19,6 +20,8 @@ from bot.groq_client import GroqClient
 from bot.linkedin_client import LinkedInClient
 from bot.trend_client import TrendClient
 import setup_linkedin_oauth as oauth
+
+logger = logging.getLogger(__name__)
 
 
 class TelegramHandler:
@@ -57,11 +60,11 @@ class TelegramHandler:
         try:
             res = requests.post(f"{self.base_url}/sendMessage", json=payload, timeout=30).json()
         except Exception as e:
-            print(f"Telegram send warning: {e}", file=sys.stderr)
+            logger.exception("stage=telegram.send status=failed reason=%s", e)
             return None
 
         if not res.get("ok"):
-            print(f"Telegram error details: {res}", file=sys.stderr)
+            logger.error("stage=telegram.send status=failed response=%s", res)
             return None
         return res["result"]["message_id"]
 
@@ -79,9 +82,9 @@ class TelegramHandler:
         try:
             res = requests.post(f"{self.base_url}/editMessageText", json=payload, timeout=30).json()
             if not res.get("ok"):
-                print(f"Telegram edit warning: {res}", file=sys.stderr)
+                logger.error("stage=telegram.edit status=failed response=%s", res)
         except Exception as e:
-            print(f"Telegram edit warning: {e}", file=sys.stderr)
+            logger.exception("stage=telegram.edit status=failed reason=%s", e)
 
     def answer_callback(self, callback_query_id: str):
         try:
@@ -91,7 +94,7 @@ class TelegramHandler:
                 timeout=10,
             )
         except Exception as e:
-            print(f"Telegram callback warning: {e}", file=sys.stderr)
+            logger.exception("stage=telegram.callback_ack status=failed reason=%s", e)
 
     def get_approval_keyboard(self) -> dict:
         return {
@@ -123,10 +126,17 @@ class TelegramHandler:
     def format_draft_preview(self, title: str, draft: str) -> str:
         return f"<b>{html.escape(title)}:</b>\n\n{html.escape(draft or '')}"
 
+    def _topic_title(self, topic) -> str:
+        if isinstance(topic, str):
+            return topic
+        if isinstance(topic, dict):
+            return topic.get("title", "")
+        return getattr(topic, "title", str(topic))
+
     def format_topics_preview(self, topics: list[str]) -> str:
         lines = ["<b>Choose AI topic for LinkedIn post:</b>"]
         for index, topic in enumerate(topics, start=1):
-            title = topic["title"] if isinstance(topic, dict) else topic
+            title = self._topic_title(topic)
             lines.append(f"\n<b>Content {index}</b>\n{html.escape(title)}")
         return "\n".join(lines)
 
@@ -150,7 +160,7 @@ class TelegramHandler:
                 self.offset = max(update["update_id"] for update in res["result"]) + 1
                 save_bot_offset(self.offset)
         except Exception as e:
-            print(f"Startup offset sync warning: {e}", file=sys.stderr)
+            logger.exception("stage=telegram.offset_sync status=failed reason=%s", e)
 
     def fetch_updates(self):
         params = {"offset": self.offset, "timeout": 20}
@@ -158,14 +168,14 @@ class TelegramHandler:
             res = requests.get(f"{self.base_url}/getUpdates", params=params, timeout=25).json()
             if res.get("ok"):
                 return res["result"]
-            print(f"Polling warning: {res}", file=sys.stderr)
+            logger.error("stage=telegram.poll status=failed response=%s", res)
         except Exception as e:
-            print(f"Polling warning: {e}", file=sys.stderr)
+            logger.exception("stage=telegram.poll status=failed reason=%s", e)
         return []
 
     def start_polling_loop(self):
         self.sync_offset_to_latest()
-        print("Telegram bot polling started...")
+        logger.info("stage=telegram.polling status=started")
         self.send_ready_message()
 
         while True:
@@ -177,14 +187,22 @@ class TelegramHandler:
                     msg = update["message"]
                     if msg["chat"]["id"] != self.user_id:
                         continue
-                    self.handle_text_message(msg)
+                    try:
+                        self.handle_text_message(msg)
+                    except Exception as e:
+                        logger.exception("stage=telegram.message status=failed reason=%s", e)
+                        self.send_message(f"Unexpected bot error: <code>{html.escape(str(e))}</code>")
 
                 elif "callback_query" in update:
                     query = update["callback_query"]
                     if query["message"]["chat"]["id"] != self.user_id:
                         continue
                     self.answer_callback(query["id"])
-                    self.handle_callback_query(query)
+                    try:
+                        self.handle_callback_query(query)
+                    except Exception as e:
+                        logger.exception("stage=telegram.callback status=failed reason=%s", e)
+                        self.send_message(f"Unexpected callback error: <code>{html.escape(str(e))}</code>")
 
             time.sleep(1)
 
@@ -258,6 +276,7 @@ class TelegramHandler:
             self.generate_draft(text_received)
 
     def show_trending_topics(self, message_id: int | None = None):
+        logger.info("stage=telegram.trending status=started")
         status = "<i>Searching current AI trends for student-friendly topics...</i>"
         if message_id:
             self.edit_message(message_id, status)
@@ -267,6 +286,8 @@ class TelegramHandler:
         try:
             current_topics = get_state().get("trending_topics") or []
             topics = self.trends.fetch_topics(limit=3, exclude_topics=current_topics)
+            if not topics:
+                raise RuntimeError("No trending topics were returned by research providers.")
             update_state(
                 step="AWAITING_TOPIC_SELECTION",
                 prompt_topic="",
@@ -279,47 +300,42 @@ class TelegramHandler:
             else:
                 msg_id = self.send_message(preview_text, reply_markup=self.get_topic_keyboard())
                 update_state(last_message_id=msg_id)
+            logger.info("stage=telegram.trending status=completed count=%s", len(topics))
         except Exception as e:
+            logger.exception("stage=telegram.trending status=failed reason=%s", e)
             self.send_message(f"Error finding trends: <code>{html.escape(str(e))}</code>")
 
     def generate_draft_from_topic_choice(self, message_id: int, state: dict, topic_index: int):
+        logger.info("stage=telegram.topic_selection status=started index=%s", topic_index)
         topics = state.get("trending_topics") or []
         if topic_index >= len(topics):
             self.send_message("Topic expired. Tap Create content again.")
             return
 
         selected = topics[topic_index]
-
-        if isinstance(selected, dict):
-
-            topic = f"""
-        Title:
-        {selected['title']}
-
-        Research:
-
-        {selected['content']}
-
-        Source:
-
-        {selected['url']}
-
-        Published:
-
-        {selected['published']}
-        """
-        else:
-            topic = selected
+        topic = self._topic_title(selected)
+        if not topic:
+            self.send_message("Topic expired. Tap Create content again.")
+            return
+        update_state(prompt_topic=topic)
         self.edit_message(message_id, f"<i>Generating post from Content {topic_index + 1}...</i>")
         self.generate_draft(topic, message_id=message_id)
 
     def generate_draft(self, topic_or_draft: str, message_id: int | None = None):
+        logger.info("stage=telegram.generate_draft status=started")
         if not message_id:
             self.send_message("<i>Generating LinkedIn draft...</i>")
         try:
-            research = self.trends.fetch_topic_research(topic_or_draft)
+            if hasattr(self.trends, "fetch_topic_research"):
+                research = self.trends.fetch_topic_research(topic_or_draft)
+            else:
+                research = topic_or_draft
+            if hasattr(research, "articles") and not research.articles:
+                raise RuntimeError("Research completed, but no usable articles were found. Try Regenerate Topics or send a more specific topic.")
             
             draft = self.groq.generate_post(research)
+            if not isinstance(draft, str) or not draft.strip():
+                raise RuntimeError("Groq did not return a usable draft.")
             update_state(step="AWAITING_APPROVAL", prompt_topic=topic_or_draft, current_draft=draft)
             preview_text = self.format_draft_preview("Generated Post Preview", draft)
             if message_id:
@@ -328,7 +344,9 @@ class TelegramHandler:
             else:
                 msg_id = self.send_message(preview_text, reply_markup=self.get_approval_keyboard())
             update_state(last_message_id=msg_id)
+            logger.info("stage=telegram.generate_draft status=completed")
         except Exception as e:
+            logger.exception("stage=telegram.generate_draft status=failed reason=%s", e)
             self.send_message(f"Error generating post: <code>{html.escape(str(e))}</code>")
 
     def edit_draft(self, feedback: str, original_draft: str | None):
@@ -349,9 +367,12 @@ class TelegramHandler:
             self.send_message(f"Error modifying post: <code>{html.escape(str(e))}</code>")
 
     def handle_callback_query(self, query: dict):
+        logger.info("stage=telegram.callback status=started data=%s", query.get("data"))
         state = get_state()
-        data = query["data"]
-        message_id = query["message"]["message_id"]
+        data = query.get("data")
+        message_id = query.get("message", {}).get("message_id")
+        if not data or not message_id:
+            raise RuntimeError("Telegram callback missing data or message id.")
 
         if data == "approve":
             self.publish_approved_post(message_id, state)
@@ -368,7 +389,13 @@ class TelegramHandler:
         elif data == "topics_regenerate":
             self.show_trending_topics(message_id=message_id)
         elif data.startswith("topic_"):
-            self.generate_draft_from_topic_choice(message_id, state, int(data.split("_", 1)[1]))
+            try:
+                topic_index = int(data.split("_", 1)[1])
+            except (IndexError, ValueError) as exc:
+                raise RuntimeError(f"Invalid topic callback data: {data}") from exc
+            self.generate_draft_from_topic_choice(message_id, state, topic_index)
+        else:
+            raise RuntimeError(f"Unknown callback data: {data}")
 
     def process_reauth_code(self, code: str):
         self.send_message("<i>Exchanging authorization code for new tokens...</i>")
@@ -394,6 +421,7 @@ class TelegramHandler:
             )
 
     def publish_approved_post(self, message_id: int, state: dict):
+        logger.info("stage=telegram.publish status=started")
         self.edit_message(message_id, "<i>Publishing to LinkedIn profile...</i>")
         try:
             caption = state.get("current_draft")
@@ -408,7 +436,9 @@ class TelegramHandler:
             reset_state()
             update_state(step="AWAITING_TOPIC")
             self.send_message("Ready for next post. Send topic or draft anytime.")
+            logger.info("stage=telegram.publish status=completed post_urn=%s", post_urn)
         except Exception as e:
+            logger.exception("stage=telegram.publish status=failed reason=%s", e)
             self.send_message(f"Failed to publish: <code>{html.escape(str(e))}</code>")
             self.edit_message(message_id, "Publication failed. Try again below.", reply_markup=self.get_approval_keyboard())
 
@@ -419,7 +449,11 @@ class TelegramHandler:
             if not topic:
                 raise Exception("No topic found. Send /new and create a draft first.")
 
-            new_draft = self.groq.generate_post(topic, temperature=0.85)
+            if hasattr(self.trends, "fetch_topic_research"):
+                research = self.trends.fetch_topic_research(topic)
+            else:
+                research = topic
+            new_draft = self.groq.generate_post(research, temperature=0.85)
             update_state(step="AWAITING_APPROVAL", current_draft=new_draft)
             preview_text = self.format_draft_preview("New Draft Variation", new_draft)
             self.edit_message(message_id, preview_text, reply_markup=self.get_approval_keyboard())
