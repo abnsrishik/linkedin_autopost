@@ -318,7 +318,7 @@ class TelegramHandler:
             self.send_message("<i>Generating LinkedIn draft...</i>")
         try:
             research = self.trends.fetch_topic_research(topic_or_draft)
-            print(research)
+            
             draft = self.groq.generate_post(research)
             update_state(step="AWAITING_APPROVAL", prompt_topic=topic_or_draft, current_draft=draft)
             preview_text = self.format_draft_preview("Generated Post Preview", draft)

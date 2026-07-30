@@ -213,7 +213,7 @@ class TrendClient:
                 "include_raw_content": True,
                 "max_results": 5,
             }
-
+ 
             response = requests.post(
                 "https://api.tavily.com/search",
                 headers=headers,
